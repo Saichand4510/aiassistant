@@ -5,6 +5,11 @@ class Meeting(Base):
     __tablename__ = "meetings"
 
     id = Column(Integer, primary_key=True, index=True)
+    title = Column(String)
+    date = Column(String)
+    participants = Column(Text)   # comma-separated
+    meeting_link = Column(String, nullable=True)
+
     file_name = Column(String)
     transcript = Column(Text)
     summary = Column(Text)
