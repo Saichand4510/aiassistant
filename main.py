@@ -3,22 +3,24 @@ import shutil
 import os
 
 from services.transcription import transcribe_audio
-from services.diarization import get_speaker_segments
-from services.merge import assign_speakers
+# from services.diarization import get_speaker_segments
+# from services.merge import assign_speakers
 from services.llm import extract_insights
 import os
 from db import SessionLocal,engine
 from models import Meeting, ActionItem,Base,Decision,Question,Topic
 app = FastAPI()
 Base.metadata.create_all(bind=engine)
-DATA_DIR = "data"
-os.makedirs(DATA_DIR, exist_ok=True)
+# DATA_DIR = "data"
+# os.makedirs(DATA_DIR, exist_ok=True)
 
 # -------------------------
 # Upload Audio
 # -------------------------
 @app.post("/upload-audio")
 async def upload_audio(file: UploadFile = File(...)):
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    DATA_DIR = os.path.join(BASE_DIR, "data")
     file_path = os.path.join(DATA_DIR, file.filename)
 
     with open(file_path, "wb") as buffer:
@@ -56,8 +58,12 @@ async def analyze(file: UploadFile = File(...)):
         # -----------------------------
         # 1. Save uploaded file
         # -----------------------------
-        os.makedirs("data", exist_ok=True)
-        file_path = f"data/{file.filename}"
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+        DATA_DIR = os.path.join(BASE_DIR, "data")
+
+        os.makedirs(DATA_DIR, exist_ok=True)
+        file_path =os.path.join(DATA_DIR, file.filename)
+        
 
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
@@ -65,14 +71,17 @@ async def analyze(file: UploadFile = File(...)):
         # -----------------------------
         # 2. Transcription + Diarization
         # -----------------------------
-        transcript_segments = transcribe_audio(file_path)
-        speaker_segments = get_speaker_segments(file_path)
-        merged = assign_speakers(transcript_segments, speaker_segments)
+        # transcript_segments = transcribe_audio(file_path)
+        # speaker_segments = get_speaker_segments(file_path)
+        # merged = assign_speakers(transcript_segments, speaker_segments)
 
-        full_text = "\n".join(
-            [f"{m['speaker']}: {m['text']}" for m in merged]
-        )
+        # full_text = "\n".join(
+        #     [f"{m['speaker']}: {m['text']}" for m in merged]
+        # )
+        print("Saved at:", file_path)
+        full_text = transcribe_audio(file_path)
 
+        print("Saved at:", file_path)
         # -----------------------------
         # 3. LLM Insights
         # -----------------------------
