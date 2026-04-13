@@ -1,10 +1,10 @@
 from pyannote.audio import Pipeline
 import os
-
-token=""
+from dotenv import load_dotenv
+load_dotenv()
 pipeline = Pipeline.from_pretrained(
     "pyannote/speaker-diarization",
-   use_auth_token=token
+   use_auth_token=os.getenv("HUGGINGFACE_TOKEN")
 )
 
 def get_speaker_segments(file_path):

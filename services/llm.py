@@ -1,3 +1,4 @@
+'''
 from langchain_groq import ChatGroq
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StructuredOutputParser, ResponseSchema
@@ -45,4 +46,44 @@ def extract_insights(transcript_text):
     
     parsed_output = parser.parse(response.content)
     print(parsed_output)
-    return parsed_output
+    return parsed_output'''
+from groq import Groq
+import os
+import json
+from dotenv import load_dotenv
+load_dotenv()
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+print("connected")
+def extract_insights(transcript_text):
+    prompt = f"""
+    Extract structured meeting insights in STRICT JSON format.
+
+    {{
+      "action_items": [
+        {{"task": "...", "assignee": "...", "deadline": "..."}}
+      ],
+      "decisions": ["..."],
+      "questions": ["..."],
+      "topics": ["..."]
+    }}
+
+    Transcript:
+    {transcript_text}
+
+"Return ONLY valid JSON. Do not add explanation."
+    """
+
+    response = client.chat.completions.create(
+        model="llama3-70b-8192",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3
+    )
+
+    content = response.choices[0].message.content
+
+    try:
+        parsed = json.loads(content)
+    except:
+        parsed = {"raw_output": content}
+
+    return parsed
