@@ -24,5 +24,5 @@ def transcribe_audio(file_path):
             model="whisper-large-v3-turbo",  # 🔥 use this
             response_format="json"
         )
-
+    # print("response",response.text)
     return response.text

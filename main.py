@@ -17,8 +17,8 @@ from services.task_integration import create_trello_task
 from pydantic import BaseModel
 app = FastAPI()
 Base.metadata.create_all(bind=engine)
-# DATA_DIR = "data"
-# os.makedirs(DATA_DIR, exist_ok=True)
+DATA_DIR = "data"
+os.makedirs(DATA_DIR, exist_ok=True)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # for development
@@ -73,10 +73,10 @@ async def create_meeting(
     # Step 3: Save event_id
     meeting.calendar_event_id = calendar_event["event_id"]
     db.commit()
-
+    meeting_id = meeting.id
     db.close()
 
-    return {"meeting_id": meeting.id}
+    return {"meeting_id": meeting_id}
 
 # -------------------------
 # Join Meeting (Mock)
@@ -94,16 +94,18 @@ async def analyze(meeting_id: int, file: UploadFile = File(...)):
     try:
         # file_path = f"{DATA_DIR}/{file.filename}"
 
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            shutil.copyfileobj(file.file, tmp)
-            file_path = tmp.name
+        file_path = f"{DATA_DIR}/{file.filename}"
+
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
 
         # transcription
         transcript = transcribe_audio(file_path)
-        os.remove(file_path) 
+        # print("transcript",transcript)
+      
         # LLM insights
         insights = extract_insights(transcript)
-        print("insights",insights) 
+        # print("insights",insights) 
         if "raw_output" in insights:
             return {"error": "LLM failed", "details": insights["raw_output"]}
 
