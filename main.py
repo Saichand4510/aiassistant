@@ -1,20 +1,24 @@
-from fastapi import FastAPI, UploadFile, File,Form
-import shutil
+from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.middleware.cors import CORSMiddleware
+
 import os
+import shutil
+import tempfile
+
+from db import SessionLocal, engine
+from models import Meeting, ActionItem, Base, Decision, Question, Topic
 
 from services.transcription import transcribe_audio
 # from services.diarization import get_speaker_segments
 # from services.merge import assign_speakers
 from services.llm import extract_insights
-import os
-from db import SessionLocal,engine
-from models import Meeting, ActionItem,Base,Decision,Question,Topic
-from fastapi.middleware.cors import CORSMiddleware
 from services.task_integration import create_trello_task
+
+from pydantic import BaseModel
 app = FastAPI()
 Base.metadata.create_all(bind=engine)
-DATA_DIR = "data"
-os.makedirs(DATA_DIR, exist_ok=True)
+# DATA_DIR = "data"
+# os.makedirs(DATA_DIR, exist_ok=True)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # for development
@@ -88,14 +92,15 @@ async def analyze(meeting_id: int, file: UploadFile = File(...)):
     db = SessionLocal()
 
     try:
-        file_path = f"{DATA_DIR}/{file.filename}"
+        # file_path = f"{DATA_DIR}/{file.filename}"
 
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            shutil.copyfileobj(file.file, tmp)
+            file_path = tmp.name
 
         # transcription
         transcript = transcribe_audio(file_path)
-
+        os.remove(file_path) 
         # LLM insights
         insights = extract_insights(transcript)
         print("insights",insights) 
