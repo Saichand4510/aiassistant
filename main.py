@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File,Form
 import shutil
 import os
 
@@ -9,33 +9,70 @@ from services.llm import extract_insights
 import os
 from db import SessionLocal,engine
 from models import Meeting, ActionItem,Base,Decision,Question,Topic
+from fastapi.middleware.cors import CORSMiddleware
+from services.task_integration import create_trello_task
 app = FastAPI()
 Base.metadata.create_all(bind=engine)
 DATA_DIR = "data"
-# os.makedirs(DATA_DIR, exist_ok=True)
-
+os.makedirs(DATA_DIR, exist_ok=True)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # for development
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 # -------------------------
 # Upload Audio
 # -------------------------
-@app.post("/meetings")
-def create_meeting(title: str, date: str, participants: str, meeting_link: str = None):
-    db = SessionLocal()
+from pydantic import BaseModel
 
+class MeetingCreate(BaseModel):
+    title: str
+    date: str
+    participants: str
+    meeting_link: str | None = None
+
+def create_calendar_event(meeting):
+    return {
+        "event_id": f"CAL-{meeting.id}",
+        "title": meeting.title,
+        "date": meeting.date,
+        "participants": meeting.participants,
+        "meeting_link": meeting.meeting_link,
+        "status": "created"
+    }
+
+
+@app.post("/meetings")
+async def create_meeting(
+    title: str = Form(...),
+    date: str = Form(...),
+    participants: str = Form(...),
+    meeting_link: str = Form(None)
+):
+    db = SessionLocal()
+    
     meeting = Meeting(
         title=title,
         date=date,
         participants=participants,
         meeting_link=meeting_link
     )
-
     db.add(meeting)
     db.commit()
-    db.refresh(meeting)
+    db.refresh(meeting)   # ✅ NOW meeting.id is available
+
+    # Step 2: Call calendar API
+    calendar_event = create_calendar_event(meeting)
+
+    # Step 3: Save event_id
+    meeting.calendar_event_id = calendar_event["event_id"]
+    db.commit()
 
     db.close()
 
     return {"meeting_id": meeting.id}
-
 
 # -------------------------
 # Join Meeting (Mock)
@@ -61,7 +98,7 @@ async def analyze(meeting_id: int, file: UploadFile = File(...)):
 
         # LLM insights
         insights = extract_insights(transcript)
-
+        print("insights",insights) 
         if "raw_output" in insights:
             return {"error": "LLM failed", "details": insights["raw_output"]}
 
@@ -71,6 +108,7 @@ async def analyze(meeting_id: int, file: UploadFile = File(...)):
         meeting.file_name = file.filename
         meeting.transcript = transcript
         meeting.summary = insights.get("summary", "")
+        # print("meeting_summary",meeting.summary)
 
         db.commit()
 
@@ -100,8 +138,11 @@ async def analyze(meeting_id: int, file: UploadFile = File(...)):
 
         return {
             "meeting_id": meeting_id,
-            "summary": insights.get("summary"),
-            "action_items": insights.get("action_items")
+            # "summary": insights.get("summary"),
+            # "action_items": insights.get("action_items"),
+            # "decisions": insights.get("decisions", []),
+            # "questions": insights.get("questions", []),
+            # "topics": insights.get("topics", [])
         }
 
     except Exception as e:
@@ -229,7 +270,7 @@ async def analyze(meeting_id: int, file: UploadFile = File(...)):
 #         db.close()
 
 @app.get("/meetings")
-def get_meetings():
+async def get_meetings():
     db = SessionLocal()
 
     meetings = db.query(Meeting).all()
@@ -247,7 +288,7 @@ def get_meetings():
     return result 
 
 @app.get("/meetings/{meeting_id}")
-def get_meeting(meeting_id: int):
+async def get_meeting(meeting_id: int):
     db = SessionLocal()
 
     meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
@@ -258,27 +299,49 @@ def get_meeting(meeting_id: int):
     topics = db.query(Topic).filter(Topic.meeting_id == meeting_id).all()
 
     db.close()
-
+    # print("insssssssssss")
+    # print(meeting.summary) 
     return {
-        "meeting": meeting.summary,
-        "action_items": actions,
-        "decisions": decisions,
-        "questions": questions,
-        "topics": topics
+        "summary": meeting.summary,
+
+        "action_items": [
+            {
+                "id": a.id,
+                "task": a.task,
+                "assignee": a.assignee,
+                "deadline": a.deadline,
+                "status": a.status
+            }
+            for a in actions
+        ],
+
+        "decisions": [d.decision_text for d in decisions],
+        "questions": [q.question_text for q in questions],
+        "topics": [t.topic_text for t in topics]
     }
 
 
 @app.get("/action-items")
-def get_action_items():
+async def get_action_items():
     db = SessionLocal()
 
     items = db.query(ActionItem).all()
 
     db.close()
-    return items 
+
+    return [
+        {
+            "id": i.id,
+            "task": i.task,
+            "assignee": i.assignee,
+            "deadline": i.deadline,
+            "status": i.status
+        }
+        for i in items
+    ]
 
 @app.put("/action-items/{item_id}")
-def update_action(item_id: int, status: str):
+async def update_action(item_id: int, status: str):
     db = SessionLocal()
 
     item = db.query(ActionItem).filter(ActionItem.id == item_id).first()
@@ -287,4 +350,56 @@ def update_action(item_id: int, status: str):
     db.commit()
     db.close()
 
-    return {"message": "updated"}
+    return {"message": "updated"} 
+
+@app.post("/tasks/push/{meeting_id}")
+async def push_tasks(meeting_id: int):
+    db = SessionLocal()
+
+    items = db.query(ActionItem).filter(ActionItem.meeting_id == meeting_id).all()
+
+    results = []
+  
+    for item in items:
+        res = create_trello_task(item)   # 👈 CALL HERE
+        results.append(res)
+       
+
+    db.close()
+
+    return {
+        "message": "Tasks pushed to Trello",
+        "results": results
+    }
+@app.get("/calendar/fetch/{meeting_id}")
+async def fetch_calendar(meeting_id: int):
+    db = SessionLocal()
+
+    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+
+    db.close()
+
+    return {
+        "event_id": meeting.calendar_event_id,
+        "title": meeting.title,
+        "date": meeting.date,
+        "participants": meeting.participants
+    } 
+@app.post("/calendar/push/{meeting_id}")
+async def push_summary(meeting_id: int):
+    db = SessionLocal()
+
+    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+
+    formatted_summary = f"""
+Summary:
+{meeting.summary}
+"""
+
+    db.close()
+
+    return {
+        "event_id": meeting.calendar_event_id,
+        "status": "updated",
+        "summary_added": formatted_summary
+    }
