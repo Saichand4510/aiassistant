@@ -9,7 +9,7 @@ class Meeting(Base):
     date = Column(String)
     participants = Column(Text)   # comma-separated
     meeting_link = Column(String, nullable=True)
-
+    calendar_event_id = Column(String, nullable=True)
     file_name = Column(String)
     transcript = Column(Text)
     summary = Column(Text)
