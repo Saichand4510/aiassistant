@@ -1,14 +1,16 @@
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-
+from fastapi import WebSocket
+import tempfile, os, subprocess
 import os
 import shutil
 import tempfile
-
+from services.google_calender import get_calendar_service
 from db import SessionLocal, engine
 from models import Meeting, ActionItem, Base, Decision, Question, Topic
-
-from services.transcription import transcribe_audio
+from datetime import datetime
+import pytz
+from services.transcription import transcribe_audio_bytes,transcribe_audio
 # from services.diarization import get_speaker_segments
 # from services.merge import assign_speakers
 from services.llm import extract_insights
@@ -29,49 +31,79 @@ app.add_middleware(
 # -------------------------
 # Upload Audio
 # -------------------------
-from pydantic import BaseModel
+
 
 class MeetingCreate(BaseModel):
     title: str
     date: str
-    participants: str
+    participants: list[str]
     meeting_link: str | None = None
 
+
+class ActionUpdate(BaseModel):
+    status: str    
+
+# def create_calendar_event(meeting):
+#     return {
+#         "event_id": f"CAL-{meeting.id}",
+#         "title": meeting.title,
+#         "date": meeting.date,
+#         "participants": meeting.participants,
+#         "meeting_link": meeting.meeting_link,
+#         "status": "created"
+#     }
+
+
 def create_calendar_event(meeting):
-    return {
-        "event_id": f"CAL-{meeting.id}",
-        "title": meeting.title,
-        "date": meeting.date,
-        "participants": meeting.participants,
-        "meeting_link": meeting.meeting_link,
-        "status": "created"
+    service = get_calendar_service()
+    dt = datetime.fromisoformat(meeting.date)
+    dt = pytz.timezone("Asia/Kolkata").localize(dt)
+    iso_date = dt.isoformat()
+    # date_str = meeting.date.strip()
+    event = {
+        'summary': meeting.title,
+        'description': f"Participants: {meeting.participants}",
+        'start': {
+            'dateTime': iso_date,
+            'timeZone': 'Asia/Kolkata',
+        },
+        'end': {
+            'dateTime': iso_date,
+            'timeZone': 'Asia/Kolkata',
+        },
+        # 'start': {'date': date_str},
+        #     'end': {'date': date_str},
     }
+
+    created_event = service.events().insert(
+        calendarId='saichandlinga@gmail.com',
+        body=event
+    ).execute()
+
+    return created_event['id']
 
 
 @app.post("/meetings")
-async def create_meeting(
-    title: str = Form(...),
-    date: str = Form(...),
-    participants: str = Form(...),
-    meeting_link: str = Form(None)
-):
+async def create_meeting(meeting: MeetingCreate):
     db = SessionLocal()
-    
+    print(meeting.date)
     meeting = Meeting(
-        title=title,
-        date=date,
-        participants=participants,
-        meeting_link=meeting_link
+         title=meeting.title,
+        date=meeting.date,
+        participants=",".join(meeting.participants),  # convert to string
+        meeting_link=meeting.meeting_link
     )
+    
+    
     db.add(meeting)
     db.commit()
     db.refresh(meeting)   # ✅ NOW meeting.id is available
 
     # Step 2: Call calendar API
-    calendar_event = create_calendar_event(meeting)
+    calendar_google_id = create_calendar_event(meeting)
 
     # Step 3: Save event_id
-    meeting.calendar_event_id = calendar_event["event_id"]
+    meeting.calendar_event_id = calendar_google_id
     db.commit()
     meeting_id = meeting.id
     db.close()
@@ -101,11 +133,11 @@ async def analyze(meeting_id: int, file: UploadFile = File(...)):
 
         # transcription
         transcript = transcribe_audio(file_path)
-        # print("transcript",transcript)
+        print("transcript",transcript)
       
         # LLM insights
         insights = extract_insights(transcript)
-        # print("insights",insights) 
+        print("insights",insights) 
         if "raw_output" in insights:
             return {"error": "LLM failed", "details": insights["raw_output"]}
 
@@ -284,7 +316,7 @@ async def get_meetings():
 
     result = [
         {
-            "id": m.id,
+            "meeting_id": m.id,
             "title": m.title,
             "date": m.date
         }
@@ -347,17 +379,23 @@ async def get_action_items():
         for i in items
     ]
 
+from pydantic import BaseModel
+
+class ActionUpdate(BaseModel):
+    status: str
 @app.put("/action-items/{item_id}")
-async def update_action(item_id: int, status: str):
+async def update_action(item_id: int, data: ActionUpdate):
     db = SessionLocal()
 
     item = db.query(ActionItem).filter(ActionItem.id == item_id).first()
-    item.status = status
+    item.status = data.status
 
     db.commit()
     db.close()
 
-    return {"message": "updated"} 
+    return {"message": "updated"}
+
+
 
 @app.post("/tasks/push/{meeting_id}")
 async def push_tasks(meeting_id: int):
@@ -378,35 +416,219 @@ async def push_tasks(meeting_id: int):
         "message": "Tasks pushed to Trello",
         "results": results
     }
-@app.get("/calendar/fetch/{meeting_id}")
-async def fetch_calendar(meeting_id: int):
-    db = SessionLocal()
+# @app.get("/calendar/fetch/{meeting_id}")
+# async def fetch_calendar(meeting_id: int):
+#     db = SessionLocal()
 
-    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+#     meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
 
-    db.close()
+#     db.close()
 
-    return {
-        "event_id": meeting.calendar_event_id,
-        "title": meeting.title,
-        "date": meeting.date,
-        "participants": meeting.participants
-    } 
+#     return {
+#         "event_id": meeting.calendar_event_id,
+#         "title": meeting.title,
+#         "date": meeting.date,
+#         "participants": meeting.participants
+#     } 
+# @app.post("/calendar/push/{meeting_id}")
+# async def push_summary(meeting_id: int):
+#     db = SessionLocal()
+
+#     meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+
+#     formatted_summary = f"""
+# Summary:
+# {meeting.summary}
+# """
+
+#     db.close()
+
+#     return {
+#         "event_id": meeting.calendar_event_id,
+#         "status": "updated",
+#         "summary_added": formatted_summary
+#     }
+
+
+
+# @app.websocket("/ws/transcribe")
+# async def ws_transcribe(websocket: WebSocket):
+#     await websocket.accept()
+
+#     buffer = b""
+
+#     try:
+#         while True:
+#             chunk = await websocket.receive_bytes()
+#             buffer += chunk
+
+#             # 🔥 process every ~5 sec
+#             if len(buffer) > 500000:  # adjust size if needed
+
+#                 # save buffer
+#                 tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".webm")
+#                 tmp.write(buffer)
+#                 tmp.close()
+
+#                 # 🔥 convert to wav (VERY IMPORTANT)
+#                 wav_path = tmp.name + ".wav"
+
+#                 subprocess.run([
+#                     "ffmpeg",
+#                     "-y",
+#                     "-i", tmp.name,
+#                     wav_path
+#                 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+#                 # 🔥 transcribe
+#                 try:
+#                     text = transcribe_audio(wav_path)
+#                 except Exception as e:
+#                     text = f"error: {str(e)}"
+
+#                 # cleanup
+#                 os.remove(tmp.name)
+#                 os.remove(wav_path)
+
+#                 buffer = b""  # reset buffer
+
+#                 await websocket.send_text(text)
+
+#     except Exception as e:
+#         print("WebSocket closed:", e)
+
+
+
+
+
 @app.post("/calendar/push/{meeting_id}")
 async def push_summary(meeting_id: int):
     db = SessionLocal()
 
     meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
 
-    formatted_summary = f"""
+    if not meeting:
+        db.close()
+        return {"error": "Meeting not found"}
+
+    service = get_calendar_service()
+
+    try:
+        # get existing event
+        event = service.events().get(
+            calendarId='saichandlinga@gmail.com',
+            eventId=meeting.calendar_event_id
+        ).execute()
+
+        # update description
+        event['description'] = f"""
+Participants: {meeting.participants}
+
 Summary:
 {meeting.summary}
 """
 
-    db.close()
+        updated_event = service.events().update(
+            calendarId='saichandlinga@gmail.com',
+            eventId=meeting.calendar_event_id,
+            body=event
+        ).execute()
 
-    return {
-        "event_id": meeting.calendar_event_id,
-        "status": "updated",
-        "summary_added": formatted_summary
-    }
+        return {
+            "event_id": updated_event["id"],
+            "status": "updated successfully"
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+
+    finally:
+        db.close() 
+
+@app.get("/calendar/fetch/{meeting_id}")
+async def fetch_calendar(meeting_id: int):
+    db = SessionLocal()
+
+    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+
+    if not meeting:
+        db.close()
+        return {"error": "Meeting not found"}
+
+    service = get_calendar_service()
+
+    try:
+        event = service.events().get(
+            calendarId='saichandlinga@gmail.com',
+            eventId=meeting.calendar_event_id
+        ).execute()
+
+        return {
+            "event_id": event["id"],
+            "title": event.get("summary"),
+            "description": event.get("description"),
+            "start": event.get("start"),
+            "end": event.get("end")
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+
+    finally:
+        db.close()
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections = {}
+
+    async def connect(self, meeting_id: int, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections[meeting_id] = websocket
+
+    def disconnect(self, meeting_id: int):
+        self.active_connections.pop(meeting_id, None)
+
+    async def send_message(self, meeting_id: int, message: str):
+        websocket = self.active_connections.get(meeting_id)
+        if websocket:
+            await websocket.send_text(message)
+
+manager = ConnectionManager()     
+
+
+from fastapi import WebSocket, WebSocketDisconnect
+
+       
+
+
+import io
+@app.websocket("/ws/transcribe/{meeting_id}")
+async def ws_transcribe(websocket: WebSocket, meeting_id: int):
+    await manager.connect(meeting_id, websocket)
+
+    buffer = b""
+
+    try:
+        while True:
+            chunk = await websocket.receive_bytes()
+            buffer += chunk
+
+            # process every ~1 second
+            if len(buffer) > 160000:
+                
+
+                try:
+                    text = transcribe_audio_bytes(buffer)
+                    await manager.send_message(meeting_id,text)
+                except Exception as e:
+                    print("Error:", e)
+
+                buffer = buffer[-160000:]  # keep last audio
+
+    except WebSocketDisconnect:
+        print(f"Client disconnected from meeting {meeting_id}")
+        manager.disconnect(meeting_id)
+
+    except Exception as e:
+        print("WebSocket error:", e)
+        manager.disconnect(meeting_id)
