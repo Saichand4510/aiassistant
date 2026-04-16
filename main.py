@@ -1,10 +1,10 @@
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import WebSocket
-import tempfile, os, subprocess
+
 import os
 import shutil
-import tempfile
+
 from services.google_calender import get_calendar_service
 from db import SessionLocal, engine
 from models import Meeting, ActionItem, Base, Decision, Question, Topic
@@ -15,7 +15,8 @@ from services.transcription import transcribe_audio_bytes,transcribe_audio
 # from services.merge import assign_speakers
 from services.llm import extract_insights
 from services.task_integration import create_trello_task
-
+import time
+import asyncio
 from pydantic import BaseModel
 app = FastAPI()
 Base.metadata.create_all(bind=engine)
@@ -602,33 +603,87 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 
 import io
+# @app.websocket("/ws/transcribe/{meeting_id}")
+# async def ws_transcribe(websocket: WebSocket, meeting_id: int):
+#     await manager.connect(meeting_id, websocket)
+
+#     buffer = b""
+
+#     try:
+#         while True:
+#             chunk = await websocket.receive_bytes()
+#             buffer += chunk
+
+#             # process every ~1 second
+#             if len(buffer) > 160000:
+                
+
+#                 try:
+#                     text = transcribe_audio_bytes(buffer)
+#                     await manager.send_message(meeting_id,text)
+#                 except Exception as e:
+#                     print("Error:", e)
+
+#                 buffer = buffer[-160000:]  # keep last audio
+
+#     except WebSocketDisconnect:
+#         print(f"Client disconnected from meeting {meeting_id}")
+#         manager.disconnect(meeting_id)
+
+#     except Exception as e:
+#         print("WebSocket error:", e)
+#         manager.disconnect(meeting_id) 
+
+
+
+async def process_audio(meeting_id, buffer):
+    try:
+        # 🔥 Check BEFORE processing
+        if meeting_id not in manager.active_connections:
+            return
+
+        text = await asyncio.to_thread(transcribe_audio_bytes, buffer)
+
+        # 🔥 Check AGAIN after processing
+        if meeting_id in manager.active_connections:
+            await manager.send_message(meeting_id, text)
+
+    except Exception as e:
+        print("Error:", e)
+
+
+
 @app.websocket("/ws/transcribe/{meeting_id}")
 async def ws_transcribe(websocket: WebSocket, meeting_id: int):
     await manager.connect(meeting_id, websocket)
 
     buffer = b""
+    print("✅ CONNECTED", meeting_id, time.time())
 
-    try:
+    try: 
+        total=0
         while True:
             chunk = await websocket.receive_bytes()
+            total += 1
+            print("TOTAL:", total)  
+            print("📥 CHUNK", len(chunk), "at", time.time())
+
             buffer += chunk
 
             # process every ~1 second
             if len(buffer) > 160000:
-                
+                print("⚙️ PROCESSING at", time.time())
 
-                try:
-                    text = transcribe_audio_bytes(buffer)
-                    await manager.send_message(meeting_id,text)
-                except Exception as e:
-                    print("Error:", e)
-
-                buffer = buffer[-160000:]  # keep last audio
+                # try:
+                #     text = transcribe_audio_bytes(buffer)
+                #     await manager.send_message(meeting_id, text)
+                # except Exception as e:
+                #     print("❌ Error:", e)
+                asyncio.create_task(process_audio(meeting_id, bytes(buffer)))
+                buffer = b""
 
     except WebSocketDisconnect:
-        print(f"Client disconnected from meeting {meeting_id}")
-        manager.disconnect(meeting_id)
-
+       print("❌ DISCONNECTED IMMEDIATELY at", time.time())
     except Exception as e:
-        print("WebSocket error:", e)
+        print("❌ WebSocket error:", e, time.time())
         manager.disconnect(meeting_id)

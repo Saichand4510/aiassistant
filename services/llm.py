@@ -126,6 +126,8 @@ Rules:
 
 Action Item Rules:
 - Include ONLY tasks explicitly assigned to a person
+- ONLY include action items where a person is DIRECTLY assigned (e.g., "Jessica, please do X")
+- Do NOT include indirect or implied assignments
 - The assignee MUST be clearly mentioned in the transcript
 - Do NOT convert decisions into action items
 - Do NOT infer or assume tasks
@@ -136,7 +138,7 @@ Decision Rules:
 - Do NOT include suggestions or discussions as decisions
 
 Question Rules:
-- Include ONLY unanswered or deferred questions in "open_questions"
+- Include ONLY unanswered or deferred questions in "questions"
 
 Transcript:
 {transcript_text}
